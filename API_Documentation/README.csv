@@ -1,0 +1,27 @@
+﻿COLLEGE SCORECARD
+"Released June 10, 2026"
+Background on the data
+"Attached is the descriptions for each data element provided in College Scorecard, including . Please note that datafiles available in the “All Data Files” provide more data elements and represent a larger universe of institutions than what is presented in the Scorecard consumer page here: collegescorecard.ed.gov. For more information on College Scorecard data, goto https://collegescorecard.ed.gov/data/documentation/"
+
+Key Tabs
+ChangeLog - describes major changes that have been made to the Data Dictionary.
+Glossary - provides definitions for terms and acronyms used in this file.
+Institution_Data_Dictionary - describes each data element in the institution-level files.
+Institution_Cohort_Map - describes which years of data are described for each variable in each institution-level datafiles. 
+"Most_Recent_Inst_Cohort_Map - descrbes which years of data are described for each variable in the ""most recent"" institution-level data file. "
+FieldOfStudy_Data_Dictionary - provides descriptions of each data element in the field-of-study-level data files.
+FieldOfStudy_Cohort_Map - provides descriptions of which years of data are covered for each variable in the field-of-study-level data files. 
+Important Data Quality Notes
+Data documentation report links:
+https://collegescorecard.ed.gov/assets/InstitutionDataDocumentation.pdf
+https://collegescorecard.ed.gov/assets/FieldOfStudyDataDocumentation.pdf
+Contacts
+"For questions, please contact"
+The College Scorecard Help Desk
+scorecarddata@rti.org
+
+
+
+
+
+Office of the Chief Data Officer
