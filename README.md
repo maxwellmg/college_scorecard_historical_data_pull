@@ -10,13 +10,13 @@ Downloads all available fields for every academic year (1996–97 through 2025�
 
 | Requirement | Notes |
 |---|---|
-| Python 3.6+ | Must be on your PATH |
+| Python 3.6+ | Must be on your PATH (or available in your Jupyter environment) |
 | `requests` library | `pip install requests` |
 | API key | Free — register at [api.data.gov/signup](https://api.data.gov/signup) |
 
 ---
 
-## Setup (both platforms)
+## Setup (all platforms)
 
 1. **Install the dependency**
 
@@ -24,7 +24,7 @@ Downloads all available fields for every academic year (1996–97 through 2025�
    pip install requests
    ```
 
-2. **Add your API key** — open `scorecard_pull.py` and replace `YOUR_API_KEY_HERE` on line 48:
+2. **Add your API key** — open `scorecard_pull.py` and replace `YOUR_API_KEY_HERE` on line 35:
 
    ```python
    API_KEY = "abc123yourkey"
@@ -123,7 +123,7 @@ Press `Win + S`, search for **Task Scheduler**, and open it.
      ```
    - Start in (optional but recommended): the folder containing the script
      ```
-     C:\full\path\to\College_Scorecard_Data_Pull
+     C:\full\path\to\college_scorecard_historical_data_pull
      ```
    - Click OK
 
@@ -137,7 +137,7 @@ Press `Win + S`, search for **Task Scheduler**, and open it.
 In Command Prompt (navigate to the script folder first):
 
 ```
-cd C:\full\path\to\College_Scorecard_Data_Pull
+cd C:\full\path\to\college_scorecard_historical_data_pull
 python scorecard_pull.py
 ```
 
@@ -158,6 +158,49 @@ Or open `scorecard_pull.log` in Notepad/Excel at any time — it appends a line 
 In Task Scheduler, right-click `CollegeScorecardPull` → **Delete**.
 
 Your progress is saved in `checkpoint.json` and `temp/`. Delete those files only if you want to start over from scratch.
+
+---
+
+## Running from Jupyter Notebook
+
+Both scripts are Jupyter-compatible and work on Mac and Windows. Open your notebook from the folder that contains `scorecard_pull.py` and `API_Documentation/`.
+
+### Start the data pull
+
+```python
+import scorecard_pull as sc
+sc.main()
+```
+
+`main()` returns cleanly when it hits the rate limit or finishes — it does not kill the kernel. The first call installs the Task Scheduler task (Windows) or crontab entry (Mac) so that subsequent restarts are handled automatically, just as they would be from the command line.
+
+### Run the test suite
+
+```python
+import test_scorecard_pull
+result = test_scorecard_pull.run_tests()
+```
+
+Or use `%run` to execute either file directly in a cell:
+
+```
+%run scorecard_pull.py
+%run test_scorecard_pull.py
+```
+
+### Run live API connectivity tests
+
+Once your API key is configured in `scorecard_pull.py`, the live tests run automatically alongside the unit tests. You can also supply the key via environment variable without editing the file:
+
+```python
+import os
+os.environ["SCORECARD_API_KEY"] = "your_key_here"
+
+import test_scorecard_pull
+test_scorecard_pull.run_tests()
+```
+
+The live tests make ~10 real API requests and verify connectivity, field names, and pagination.
 
 ---
 
@@ -188,12 +231,33 @@ No requests are ever lost or duplicated.
 
 ---
 
+## Running the tests
+
+The test suite covers all key functionality: checkpoint save/load, rate-limit logic, CSV output, pagination, scheduler install/remove, and API connectivity.
+
+```bash
+# Mac / Linux
+python3 test_scorecard_pull.py
+
+# Windows Command Prompt
+python test_scorecard_pull.py
+
+# With pytest (optional, prettier output)
+pip install pytest
+pytest test_scorecard_pull.py -v
+```
+
+86 tests run by default. The 11 live API tests are skipped automatically until an API key is configured (see "Run live API connectivity tests" above).
+
+---
+
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| `API_KEY not configured` error | Edit line 48 of `scorecard_pull.py` with your key |
-| Script runs but no progress in log | Check that Task Scheduler task is enabled and the Python path is correct |
+| `API_KEY not configured` message in log | Edit line 35 of `scorecard_pull.py` with your key |
+| Script runs but no progress in log | Check that the Task Scheduler task is enabled and the Python path is correct |
 | `schtasks` error on first run | Use the manual Task Scheduler setup (Option B above) |
 | Log shows repeated `hold active` lines | Normal — it's waiting for the rate-limit window to reset |
 | Want to restart from scratch | Delete `checkpoint.json` and the `temp/` folder |
+| Live API tests still skipped after setting key | Make sure you restarted the Python session / re-imported after setting the env var |
