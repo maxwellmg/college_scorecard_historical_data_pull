@@ -60,7 +60,17 @@ RETRY_ATTEMPTS      = 3
 RETRY_DELAY_SEC     = 10
 
 # ── PATHS ───────────────────────────────────────────────────────────────────
-SCRIPT_DIR  = Path(__file__).parent.resolve()
+# __file__ is defined when running as a script or via `import`, but not when
+# the code is exec()'d or pasted into a Jupyter cell.  The fallback uses the
+# current working directory so Jupyter users can place the notebook alongside
+# the script and API_Documentation folder.
+try:
+    SCRIPT_DIR  = Path(__file__).parent.resolve()
+    _SCRIPT_FILE = Path(__file__).resolve()
+except NameError:
+    SCRIPT_DIR  = Path.cwd()
+    _SCRIPT_FILE = SCRIPT_DIR / "scorecard_pull.py"
+
 OUTPUT_DIR  = SCRIPT_DIR / "output"
 TEMP_DIR    = SCRIPT_DIR / "temp"
 CHECKPOINT  = SCRIPT_DIR / "checkpoint.json"
@@ -214,7 +224,7 @@ def remove_scheduler():
 # ── Mac / Linux ──────────────────────────────────────────────────────────────
 
 def _setup_crontab():
-    script   = str(Path(__file__).resolve())
+    script   = str(_SCRIPT_FILE)
     python   = sys.executable
     log_path = str(LOG_FILE)
     cron_cmd = "*/{interval} * * * * {py} {sc} >> {lg} 2>&1".format(
@@ -238,7 +248,7 @@ def _setup_crontab():
 
 
 def _remove_crontab():
-    marker = str(Path(__file__).resolve())
+    marker = str(_SCRIPT_FILE)
     result = subprocess.run(
         ["crontab", "-l"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True,
@@ -257,7 +267,7 @@ def _remove_crontab():
 # ── Windows ──────────────────────────────────────────────────────────────────
 
 def _setup_task_scheduler():
-    script = str(Path(__file__).resolve())
+    script = str(_SCRIPT_FILE)
     python = sys.executable
     # Run as the current user; no admin rights required
     cmd = [
@@ -391,7 +401,7 @@ def main():
     if API_KEY == "YOUR_API_KEY_HERE":
         log("ERROR: API_KEY not configured. "
             "Edit scorecard_pull.py and replace YOUR_API_KEY_HERE with your key.")
-        sys.exit(1)
+        return
 
     cp = load_checkpoint()
 
@@ -477,7 +487,7 @@ def main():
                     cp["batch_idx"]    = b_idx
                     cp["page"]         = page
                     save_checkpoint(cp)
-                    sys.exit(1)
+                    return
 
                 cp["requests_in_window"] += 1
 

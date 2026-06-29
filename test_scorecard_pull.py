@@ -35,7 +35,13 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch, call
 
 # ── Import the module under test ──────────────────────────────────────────────
-sys.path.insert(0, str(Path(__file__).parent))
+# __file__ is always defined when this file is run via `python` or `%run`, and
+# when it is imported as a module.  The NameError fallback covers the rare case
+# of exec()-ing the source directly (e.g. copy-paste into a Jupyter cell).
+try:
+    sys.path.insert(0, str(Path(__file__).parent))
+except NameError:
+    sys.path.insert(0, str(Path.cwd()))
 import scorecard_pull as sc
 
 # ── Shared test data ──────────────────────────────────────────────────────────
@@ -541,9 +547,13 @@ class TestMainFlow(unittest.TestCase):
     # ── API key guard ─────────────────────────────────────────────────────────
 
     def test_exits_if_api_key_not_configured(self):
+        # main() now returns early instead of calling sys.exit(), so it must
+        # complete without error AND produce no output files.
         with patch.object(sc, "API_KEY", "YOUR_API_KEY_HERE"):
-            with self.assertRaises(SystemExit):
-                sc.main()
+            sc.main()   # should return cleanly, not raise
+        output = list((self.tmp / "output").glob("*.csv")) if (self.tmp / "output").exists() else []
+        self.assertEqual(output, [],
+                         msg="main() should produce no CSVs when API key is unconfigured")
 
     # ── Scheduler lifecycle ───────────────────────────────────────────────────
 
@@ -834,7 +844,7 @@ _LIVE_API_KEY = os.environ.get("SCORECARD_API_KEY") or (
 
 @unittest.skipIf(
     _LIVE_API_KEY is None,
-    "Live API tests skipped — set API_KEY in scorecard_pull.py or "
+    "Live API tests skipped - set API_KEY in scorecard_pull.py or "
     "export SCORECARD_API_KEY=<your_key> to enable them."
 )
 class TestLiveAPI(unittest.TestCase):
@@ -1024,5 +1034,35 @@ class TestLiveAPI(unittest.TestCase):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+def run_tests(verbosity=2):
+    """
+    Run the full test suite and return the result object.
+
+    Use this from a Jupyter cell instead of running the file directly:
+
+        import test_scorecard_pull
+        result = test_scorecard_pull.run_tests()
+
+    Or after %run:
+
+        %run test_scorecard_pull.py  # auto-calls run_tests() for you
+
+    Unlike unittest.main(), this function does NOT call sys.exit(), so it
+    works cleanly inside a Jupyter kernel without killing the session.
+    """
+    import io
+    # Wrap stdout in a UTF-8 stream so skip/error messages with non-ASCII
+    # characters don't crash on Python 3.6's default ASCII terminal (Windows).
+    try:
+        stream = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8",
+                                  line_buffering=True)
+    except AttributeError:
+        stream = sys.stdout   # Jupyter notebooks expose a plain StringIO
+    loader = unittest.TestLoader()
+    suite  = loader.loadTestsFromModule(sys.modules[__name__])
+    runner = unittest.TextTestRunner(verbosity=verbosity, stream=stream)
+    return runner.run(suite)
+
+
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    run_tests()
