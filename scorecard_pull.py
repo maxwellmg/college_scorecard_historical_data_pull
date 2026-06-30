@@ -159,10 +159,46 @@ def build_batches(year, year_fields, static_fields):
 
 # ─────────────────────────── Checkpoint I/O ─────────────────────────────────
 
-def load_checkpoint():
-    if CHECKPOINT.exists():
-        with open(str(CHECKPOINT), encoding="utf-8") as fh:
-            return json.load(fh)
+def _load_json_safe(path, description):
+    """
+    Read a JSON file and return its contents as a Python object.
+
+    If the file is corrupted (e.g. a write was interrupted mid-stream, leaving
+    valid JSON followed by truncated garbage), attempt to recover the first
+    complete JSON value via raw_decode so no saved progress is lost.
+    Returns None if the file cannot be read at all.
+    """
+    with open(str(path), encoding="utf-8") as fh:
+        content = fh.read()
+    try:
+        return json.loads(content)
+    except ValueError:
+        try:
+            obj, _ = json.JSONDecoder().raw_decode(content)
+            log("WARNING: {} was corrupted (truncated write). "
+                "Recovered {} records from the readable portion.".format(
+                    description, len(obj) if isinstance(obj, dict) else "?"))
+            return obj
+        except ValueError:
+            log("WARNING: {} is unreadable and cannot be recovered.".format(description))
+            return None
+
+
+def _save_json_atomic(path, data, **dump_kwargs):
+    """
+    Write data to path as JSON using a write-then-rename pattern so that an
+    interrupted write never corrupts the existing file.  The old file remains
+    intact until the new one is fully flushed to disk.
+    """
+    tmp = path.with_suffix(".tmp")
+    with open(str(tmp), "w", encoding="utf-8") as fh:
+        json.dump(data, fh, **dump_kwargs)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(str(tmp), str(path))   # atomic on both Windows and Unix
+
+
+def _default_checkpoint():
     return {
         "current_year":        API_YEARS[0],
         "batch_idx":           0,
@@ -175,24 +211,32 @@ def load_checkpoint():
     }
 
 
+def load_checkpoint():
+    if not CHECKPOINT.exists():
+        return _default_checkpoint()
+    cp = _load_json_safe(CHECKPOINT, "checkpoint.json")
+    if cp is None:
+        log("Starting from scratch due to unreadable checkpoint.")
+        return _default_checkpoint()
+    return cp
+
+
 def save_checkpoint(cp):
-    with open(str(CHECKPOINT), "w", encoding="utf-8") as fh:
-        json.dump(cp, fh, indent=2)
+    _save_json_atomic(CHECKPOINT, cp, indent=2)
 
 
 def load_year_data(year):
     path = TEMP_DIR / "{}_data.json".format(year)
-    if path.exists():
-        with open(str(path), encoding="utf-8") as fh:
-            return json.load(fh)
-    return {}
+    if not path.exists():
+        return {}
+    data = _load_json_safe(path, "{}_data.json".format(year))
+    return data if data is not None else {}
 
 
 def save_year_data(year, data):
     TEMP_DIR.mkdir(exist_ok=True)
     path = TEMP_DIR / "{}_data.json".format(year)
-    with open(str(path), "w", encoding="utf-8") as fh:
-        json.dump(data, fh)
+    _save_json_atomic(path, data)
 
 
 # ─────────────────── Cross-platform Scheduler Management ────────────────────
@@ -269,7 +313,10 @@ def _remove_crontab():
 def _setup_task_scheduler():
     script = str(_SCRIPT_FILE)
     python = sys.executable
-    # Run as the current user; no admin rights required
+    # Run as the current user; no admin rights required.
+    # Note: when launching from Jupyter/conda the task inherits sys.executable
+    # (the full path to that Python), so packages installed in the same env
+    # are available when the task fires.
     cmd = [
         "schtasks", "/create",
         "/tn", TASK_NAME,
@@ -279,16 +326,24 @@ def _setup_task_scheduler():
         "/f",   # overwrite if task already exists
     ]
     try:
-        subprocess.run(
+        result = subprocess.run(
             cmd,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True,
-            check=True,
         )
-        log("Task Scheduler task '{}' created: runs every {} min.".format(
-            TASK_NAME, CRON_INTERVAL_MIN))
+        if result.returncode == 0:
+            log("Task Scheduler task '{}' created: runs every {} min.".format(
+                TASK_NAME, CRON_INTERVAL_MIN))
+            log("  Python: {}".format(python))
+            log("  Script: {}".format(script))
+            log("  Verify in Task Scheduler or run: schtasks /query /tn {}".format(TASK_NAME))
+        else:
+            log("WARNING: schtasks returned exit code {}: {}".format(
+                result.returncode, result.stderr.strip()))
+            log("Auto-resume via Task Scheduler may not work.")
+            log("Fallback: re-run sc.main() in Jupyter after each rate-limit pause (~1 hour).")
     except Exception as exc:
         log("WARNING: Could not create Task Scheduler task: {}".format(exc))
-        log("Please set it up manually -- see README.md for instructions.")
+        log("Fallback: re-run sc.main() in Jupyter after each rate-limit pause (~1 hour).")
 
 
 def _remove_task_scheduler():

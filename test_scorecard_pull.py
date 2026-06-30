@@ -35,13 +35,24 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch, call
 
 # ── Import the module under test ──────────────────────────────────────────────
-# __file__ is always defined when this file is run via `python` or `%run`, and
-# when it is imported as a module.  The NameError fallback covers the rare case
-# of exec()-ing the source directly (e.g. copy-paste into a Jupyter cell).
+# Resolve the scripts directory so that `scorecard_pull` is importable regardless
+# of where Jupyter was launched from.
+#
+# Priority:
+#   1. The directory containing this file (__file__ is always absolute when
+#      the file is imported as a module or run via `python`/`%run`).
+#   2. If __file__ is relative (rare edge case with exec()), resolve it against
+#      cwd so we still get an absolute path.
+#   3. If __file__ is not defined at all (code pasted into a cell), fall back
+#      to cwd — the user must have changed to the scripts directory first.
 try:
-    sys.path.insert(0, str(Path(__file__).parent))
+    _here = Path(__file__).resolve().parent
 except NameError:
-    sys.path.insert(0, str(Path.cwd()))
+    _here = Path.cwd()
+
+if str(_here) not in sys.path:
+    sys.path.insert(0, str(_here))
+
 import scorecard_pull as sc
 
 # ── Shared test data ──────────────────────────────────────────────────────────
@@ -284,6 +295,30 @@ class TestYearDataIO(unittest.TestCase):
         sc.save_year_data("2000", {"k": "original"})
         sc.save_year_data("2000", {"k": "updated"})
         self.assertEqual(sc.load_year_data("2000")["k"], "updated")
+
+    def test_corrupted_year_data_extra_trailing_bytes_recovers(self):
+        """
+        Simulate a truncated write: valid JSON followed by garbage bytes
+        (the 'Extra data' error).  load_year_data must recover the valid part.
+        """
+        data = {"100001": {"id": 100001, "school.name": "MIT"}}
+        good_json = json.dumps(data)
+        corrupted  = good_json + "}{garbage truncated write"
+        path = Path(self.tmpdir) / "1998_data.json"
+        with open(str(path), "w", encoding="utf-8") as fh:
+            fh.write(corrupted)
+        with patch("scorecard_pull.log"):
+            recovered = sc.load_year_data("1998")
+        self.assertEqual(recovered, data)
+
+    def test_fully_unreadable_year_data_returns_empty(self):
+        """A completely garbled file returns {} rather than raising."""
+        path = Path(self.tmpdir) / "1999_data.json"
+        with open(str(path), "w", encoding="utf-8") as fh:
+            fh.write("}{not json at all")
+        with patch("scorecard_pull.log"):
+            result = sc.load_year_data("1999")
+        self.assertEqual(result, {})
 
 
 # ══════════════════════════════════════════════════════════════════════════════
