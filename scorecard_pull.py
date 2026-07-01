@@ -474,9 +474,129 @@ def write_year_csv(year, year_data):
         outfile.name, len(year_data), len(all_cols)))
 
 
+# ──────────────────────────── Single-year pull ──────────────────────────────
+
+def _pull_single_year(year):
+    """
+    Pull every field for one academic year and return the results as a list
+    of dicts (one dict per institution).  A CSV is also written to output/.
+
+    Unlike the full historical pull, this function blocks through rate-limit
+    pauses (sleeping in-place) rather than saving a checkpoint and exiting,
+    so it runs to completion in one Jupyter cell.
+
+    Parameters
+    ----------
+    year : str  e.g. "2023"
+
+    Returns
+    -------
+    list of dict  — each dict is one institution's full record for that year.
+                    Convert to a DataFrame with pd.DataFrame(records).
+    """
+    OUTPUT_DIR.mkdir(exist_ok=True)
+
+    if str(year) not in API_YEARS:
+        log("ERROR: '{}' is not a valid year. Choose from {} to {}.".format(
+            year, API_YEARS[0], API_YEARS[-1]))
+        return []
+
+    year = str(year)
+    log("=" * 60)
+    log("Single-year pull: {}–{}".format(year, int(year) + 1))
+
+    year_fields, static_fields = load_data_dictionary()
+    batches = build_batches(year, year_fields, static_fields)
+    log("{} field batches to fetch.".format(len(batches)))
+
+    year_data        = {}
+    req_in_window    = 0
+    window_start     = datetime.now()
+
+    for b_idx, batch in enumerate(batches):
+        page        = 0
+        total_pages = None
+
+        while True:
+            # ── Rate-limit guard: sleep in place rather than exit ────────────
+            if req_in_window >= MAX_REQUESTS_PER_HOUR:
+                reset_at   = window_start + timedelta(hours=1, minutes=5)
+                sleep_sec  = max(0, (reset_at - datetime.now()).total_seconds())
+                log("Rate limit reached ({} requests). "
+                    "Sleeping {:.0f} min before continuing...".format(
+                        req_in_window, sleep_sec / 60))
+                time.sleep(sleep_sec)
+                req_in_window = 0
+                window_start  = datetime.now()
+                log("Resuming.")
+
+            # ── Fetch ────────────────────────────────────────────────────────
+            try:
+                results, total = fetch_page(batch, page)
+            except RuntimeError as exc:
+                log("Fatal fetch error: {}. Aborting single-year pull.".format(exc))
+                return list(year_data.values())
+
+            req_in_window += 1
+
+            if total_pages is None:
+                total_pages = max(1, (total + PER_PAGE - 1) // PER_PAGE)
+                log("  Batch {}/{}: {:,} institutions, {} pages".format(
+                    b_idx + 1, len(batches), total, total_pages))
+
+            for record in results:
+                uid = str(record.get("id", "")).strip()
+                if uid:
+                    if uid not in year_data:
+                        year_data[uid] = {}
+                    year_data[uid].update(record)
+
+            log("    page {}/{} | window requests used: {}".format(
+                page + 1, total_pages, req_in_window))
+
+            page += 1
+            if page >= total_pages:
+                break
+
+    write_year_csv(year, year_data)
+    records = list(year_data.values())
+    log("Done. {} institutions collected for {}–{}.".format(
+        len(records), year, int(year) + 1))
+    return records
+
+
 # ────────────────────────────── Main ────────────────────────────────────────
 
-def main():
+def main(year=None):
+    """
+    Run the College Scorecard data pull.
+
+    Parameters
+    ----------
+    year : str or int, optional
+        When provided (e.g. year="2023" or year=2023), pull only that single
+        academic year.  The function blocks through any rate-limit pauses and
+        returns the collected records as a list of dicts when done.
+
+        When omitted, run the full 30-year historical pull with the normal
+        checkpoint/scheduler resume behaviour (no return value).
+
+    Examples
+    --------
+    # Full historical pull (runs in background, auto-resumes via Task Scheduler)
+    sc.main()
+
+    # Single-year pull — blocks until complete, returns data
+    records = sc.main(year="2023")
+    df = pd.DataFrame(records)   # optional, requires pandas
+    """
+    if year is not None:
+        if API_KEY == "YOUR_API_KEY_HERE":
+            log("ERROR: API_KEY not configured. "
+                "Edit scorecard_pull.py and replace YOUR_API_KEY_HERE with your key.")
+            return []
+        return _pull_single_year(year)
+
     OUTPUT_DIR.mkdir(exist_ok=True)
     TEMP_DIR.mkdir(exist_ok=True)
 

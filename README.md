@@ -76,6 +76,12 @@ python scorecard_pull.py
 
 If the script prints `Task Scheduler task 'CollegeScorecardPull' created`, you're done. Leave the PC on and it will handle everything.
 
+To verify the task was created correctly:
+
+```
+schtasks /query /tn CollegeScorecardPull
+```
+
 ---
 
 ### Option B — Manual Task Scheduler setup
@@ -155,7 +161,35 @@ Or open `scorecard_pull.log` in Notepad/Excel at any time — it appends a line 
 
 ### Stopping early on Windows
 
-In Task Scheduler, right-click `CollegeScorecardPull` → **Delete**.
+**From Jupyter:**
+
+```python
+import subprocess
+
+# Remove the Task Scheduler task (stops future auto-runs)
+r = subprocess.run(
+    ['schtasks', '/delete', '/tn', 'CollegeScorecardPull', '/f'],
+    capture_output=True, text=True
+)
+print("Task Scheduler:", r.stdout.strip() or r.stderr.strip())
+
+# Kill any Python processes currently running scorecard_pull.py
+r = subprocess.run(
+    ['wmic', 'process', 'where',
+     "name='python.exe' and commandline like '%scorecard_pull%'",
+     'delete'],
+    capture_output=True, text=True
+)
+print("Processes killed:", r.stdout.strip() or r.stderr.strip() or "none found")
+```
+
+**From Command Prompt:**
+
+```
+schtasks /delete /tn CollegeScorecardPull /f
+```
+
+Then open Task Manager → Details tab → find any `python.exe` processes and end them.
 
 Your progress is saved in `checkpoint.json` and `temp/`. Delete those files only if you want to start over from scratch.
 
@@ -163,16 +197,56 @@ Your progress is saved in `checkpoint.json` and `temp/`. Delete those files only
 
 ## Running from Jupyter Notebook
 
-Both scripts are Jupyter-compatible and work on Mac and Windows. Open your notebook from the folder that contains `scorecard_pull.py` and `API_Documentation/`.
+Both scripts are Jupyter-compatible and work on Mac and Windows. Open your notebook from the folder that contains `scorecard_pull.py` and `API_Documentation/`, or set the working directory in the first cell:
 
-### Start the data pull
+```python
+import os
+os.chdir(r"C:\full\path\to\college_scorecard_historical_data_pull")
+```
+
+### Full historical pull
 
 ```python
 import scorecard_pull as sc
 sc.main()
 ```
 
-`main()` returns cleanly when it hits the rate limit or finishes — it does not kill the kernel. The first call installs the Task Scheduler task (Windows) or crontab entry (Mac) so that subsequent restarts are handled automatically, just as they would be from the command line.
+`main()` returns cleanly when it hits the rate limit or finishes — it does not kill the kernel.
+
+**Important — Task Scheduler and Jupyter:** When launched from Jupyter (especially a conda or virtual environment), the auto-created Task Scheduler task may not fire reliably because Windows runs it in a minimal environment without your Python environment activated. Check the log after an hour to see if it resumed on its own:
+
+```python
+import subprocess
+r = subprocess.run(['schtasks', '/query', '/tn', 'CollegeScorecardPull'],
+                   capture_output=True, text=True)
+print(r.stdout or r.stderr)
+```
+
+If it did not resume automatically, manually re-run after each rate-limit pause (~1 hour):
+
+```python
+sc.main()   # reads checkpoint.json and picks up exactly where it left off
+```
+
+The `next_run_after` field in `checkpoint.json` shows the exact time the hold expires.
+
+### Single-year pull
+
+Pull one year, block through any rate-limit pauses, and get the data back as a list of dicts:
+
+```python
+records = sc.main(year="2023")
+
+# Optional: convert to a DataFrame
+import pandas as pd
+df = pd.DataFrame(records)
+df.head()
+```
+
+- Writes `output/scorecard_2023_2024.csv` to disk as normal
+- Sleeps through rate-limit pauses rather than exiting, so the cell runs to completion (~3 hours for a recent year)
+- Does **not** touch the full historical pull checkpoint
+- Valid years: `"1996"` through `"2025"` (integer or string both accepted)
 
 ### Run the test suite
 
@@ -219,21 +293,43 @@ Each CSV has `id` (UNITID) as the first column, followed by static school fields
 
 ## How the rate limiting works
 
-The College Scorecard API allows 1,000 requests per hour. The script:
+The College Scorecard API allows 1,000 requests per hour. The script tracks usage and handles pauses differently depending on mode:
 
-1. Tracks how many requests it has made in the current hour
-2. When it reaches 950 (a safe buffer), saves its exact position and exits
+**Full historical pull (`sc.main()`):**
+1. Tracks requests made in the current hour
+2. At 950 (safe buffer), saves its exact position to `checkpoint.json` and exits
 3. Task Scheduler (or crontab) relaunches it every 15 minutes
-4. On each relaunch, it checks whether the hold period has expired; if not, it exits immediately (no wasted requests)
-5. Once the hour window resets, it resumes exactly where it left off
+4. On each relaunch, it checks whether the hold period has expired; if not, exits immediately
+5. Once the window resets, resumes exactly where it left off
 
-No requests are ever lost or duplicated.
+**Single-year pull (`sc.main(year="2023")`):**
+1. Same 950-request limit per hour
+2. When reached, sleeps in place until the window resets (~65 minutes)
+3. Automatically continues — no checkpoint or restart needed
+4. Returns when the year is fully collected
+
+No requests are ever lost or duplicated in either mode.
+
+---
+
+## Interruption and file recovery
+
+Saves are **atomic**: data is written to a `.tmp` file, flushed to disk, then renamed over the final file in one step. If the process is killed mid-write, the previous file is left intact.
+
+If a file was corrupted before this fix was applied, the script recovers automatically on the next run using two strategies:
+
+| Error seen | What happened | How it recovers |
+|---|---|---|
+| `Extra data` | New write smaller than old file — stale bytes trail valid JSON | Extracts the valid prefix |
+| `Expecting property name` | File cut off mid-stream | Scans backward for the last complete record and reconstructs the object |
+
+A `WARNING:` line in the log shows how many records were recovered. Any records near the cut point are re-fetched on the next run.
 
 ---
 
 ## Running the tests
 
-The test suite covers all key functionality: checkpoint save/load, rate-limit logic, CSV output, pagination, scheduler install/remove, and API connectivity.
+The test suite covers all key functionality: checkpoint save/load, corruption recovery, rate-limit logic, CSV output, pagination, scheduler install/remove, and API connectivity.
 
 ```bash
 # Mac / Linux
@@ -247,7 +343,7 @@ pip install pytest
 pytest test_scorecard_pull.py -v
 ```
 
-86 tests run by default. The 11 live API tests are skipped automatically until an API key is configured (see "Run live API connectivity tests" above).
+89 tests run by default. The 11 live API tests are skipped automatically until an API key is configured (see "Run live API connectivity tests" above).
 
 ---
 
@@ -258,6 +354,9 @@ pytest test_scorecard_pull.py -v
 | `API_KEY not configured` message in log | Edit line 35 of `scorecard_pull.py` with your key |
 | Script runs but no progress in log | Check that the Task Scheduler task is enabled and the Python path is correct |
 | `schtasks` error on first run | Use the manual Task Scheduler setup (Option B above) |
-| Log shows repeated `hold active` lines | Normal — it's waiting for the rate-limit window to reset |
+| Log shows repeated `hold active` lines | Normal — it is waiting for the rate-limit window to reset |
+| Task Scheduler did not resume after rate limit | Expected when running from Jupyter/conda — manually re-run `sc.main()` after ~1 hour |
+| Multiple copies of the script running at once | Use the "Stopping early" cell above to kill all processes and remove the task, then restart |
+| `JSONDecodeError` on startup | Script auto-recovers; check log for `WARNING:` lines showing how many records were saved |
 | Want to restart from scratch | Delete `checkpoint.json` and the `temp/` folder |
-| Live API tests still skipped after setting key | Make sure you restarted the Python session / re-imported after setting the env var |
+| Live API tests still skipped after setting key | Restart the Python session / re-import the module after setting the env var |
