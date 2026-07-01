@@ -298,8 +298,8 @@ class TestYearDataIO(unittest.TestCase):
 
     def test_corrupted_year_data_extra_trailing_bytes_recovers(self):
         """
-        Simulate a truncated write: valid JSON followed by garbage bytes
-        (the 'Extra data' error).  load_year_data must recover the valid part.
+        Strategy A: valid JSON followed by trailing garbage ('Extra data' error).
+        load_year_data must recover the valid part via raw_decode.
         """
         data = {"100001": {"id": 100001, "school.name": "MIT"}}
         good_json = json.dumps(data)
@@ -310,6 +310,24 @@ class TestYearDataIO(unittest.TestCase):
         with patch("scorecard_pull.log"):
             recovered = sc.load_year_data("1998")
         self.assertEqual(recovered, data)
+
+    def test_corrupted_year_data_truncated_mid_write_recovers(self):
+        """
+        Strategy B: file cut off mid-stream ('Expecting property name' error).
+        load_year_data must recover all complete entries before the cut point.
+        """
+        complete = {
+            "100001": {"id": 100001, "school.name": "MIT"},
+            "100002": {"id": 100002, "school.name": "Harvard"},
+        }
+        # Simulate a write cut off while writing the third entry
+        partial = json.dumps(complete)[:-1] + ', "100003": {"id": 100003, "school.na'
+        path = Path(self.tmpdir) / "2001_data.json"
+        with open(str(path), "w", encoding="utf-8") as fh:
+            fh.write(partial)
+        with patch("scorecard_pull.log"):
+            recovered = sc.load_year_data("2001")
+        self.assertEqual(recovered, complete)
 
     def test_fully_unreadable_year_data_returns_empty(self):
         """A completely garbled file returns {} rather than raising."""

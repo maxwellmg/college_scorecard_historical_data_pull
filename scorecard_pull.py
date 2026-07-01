@@ -23,6 +23,7 @@ from __future__ import print_function  # py2 compat guard (harmless on py3)
 import csv
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -161,27 +162,56 @@ def build_batches(year, year_fields, static_fields):
 
 def _load_json_safe(path, description):
     """
-    Read a JSON file and return its contents as a Python object.
+    Read a JSON file, with two corruption-recovery strategies.
 
-    If the file is corrupted (e.g. a write was interrupted mid-stream, leaving
-    valid JSON followed by truncated garbage), attempt to recover the first
-    complete JSON value via raw_decode so no saved progress is lost.
-    Returns None if the file cannot be read at all.
+    Strategy A — "Extra data" (valid JSON + trailing stale bytes from a
+    previous larger file):  raw_decode() extracts the first complete value.
+
+    Strategy B — "Truncated write" (file cut off mid-stream, producing
+    incomplete JSON):  scan backward through the content for the last "},",
+    which marks the end of a complete top-level dict entry, close the outer
+    object there, and parse what we have.  Each candidate is validated by
+    json.loads so we never silently return garbage.
+
+    Returns None only if no data can be salvaged at all.
     """
     with open(str(path), encoding="utf-8") as fh:
         content = fh.read()
+
+    # Fast path — clean file.
     try:
         return json.loads(content)
     except ValueError:
+        pass
+
+    # Strategy A: valid prefix + trailing garbage.
+    try:
+        obj, _ = json.JSONDecoder().raw_decode(content)
+        log("WARNING: {} had trailing bytes after valid JSON. "
+            "Recovered {} records.".format(
+                description, len(obj) if isinstance(obj, dict) else "?"))
+        return obj
+    except ValueError:
+        pass
+
+    # Strategy B: truncated write — find the last complete top-level entry.
+    # Each entry in a dict-of-dicts ends with "}," so scanning backward for
+    # that pattern gives candidate cut points.  We close the outer "{" and
+    # let json.loads decide whether the result is well-formed.
+    for match in reversed(list(re.finditer(r'\}\s*,', content))):
+        candidate = content[:match.start() + 1] + "}"
         try:
-            obj, _ = json.JSONDecoder().raw_decode(content)
-            log("WARNING: {} was corrupted (truncated write). "
-                "Recovered {} records from the readable portion.".format(
+            obj = json.loads(candidate)
+            log("WARNING: {} was truncated mid-write. "
+                "Recovered {} records (records near the cut point may be missing).".format(
                     description, len(obj) if isinstance(obj, dict) else "?"))
             return obj
         except ValueError:
-            log("WARNING: {} is unreadable and cannot be recovered.".format(description))
-            return None
+            continue
+
+    log("WARNING: {} cannot be recovered. "
+        "This year will be re-pulled from scratch.".format(description))
+    return None
 
 
 def _save_json_atomic(path, data, **dump_kwargs):
