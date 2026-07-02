@@ -197,14 +197,39 @@ Your progress is saved in `checkpoint.json` and `temp/`. Delete those files only
 
 ## Running from Jupyter Notebook
 
-Both scripts are Jupyter-compatible and work on Mac and Windows. Open your notebook from the folder that contains `scorecard_pull.py` and `API_Documentation/`, or set the working directory in the first cell:
+Both scripts are Jupyter-compatible and work on Mac and Windows.
+
+### Option 1 — import as a module (recommended)
+
+Open your notebook from the folder that contains `scorecard_pull.py` and `API_Documentation/`, or set the working directory in the first cell, then import:
 
 ```python
 import os
 os.chdir(r"C:\full\path\to\college_scorecard_historical_data_pull")
+
+import scorecard_pull as sc
+sc.main()
 ```
 
-### Full historical pull
+### Option 2 — paste the code directly into a cell
+
+If you paste the contents of `scorecard_pull.py` into a Jupyter cell, set `JUPYTER_BASE_DIR` at the top of the pasted code so the script can find `API_Documentation/` and write output files to the right place:
+
+```python
+JUPYTER_BASE_DIR = r"C:\full\path\to\college_scorecard_historical_data_pull"
+API_KEY = "your_key_here"
+# ... rest of the pasted code ...
+```
+
+If `JUPYTER_BASE_DIR` is left as `None`, the script falls back to Jupyter's current working directory and will print a warning if `API_Documentation/` is not found there.
+
+After the cell is run, call `main()` directly (no `sc.` prefix):
+
+```python
+records = main(year="2023")
+```
+
+### Full historical pull (module import)
 
 ```python
 import scorecard_pull as sc

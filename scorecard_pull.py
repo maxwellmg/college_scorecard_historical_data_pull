@@ -35,6 +35,11 @@ import requests
 # ── USER CONFIGURATION ─────────────────────────────────────────────────────
 API_KEY = "YOUR_API_KEY_HERE"   # <-- paste your api.data.gov key here
 
+# When pasting this code directly into a Jupyter cell (not importing it as a
+# module), set this to the folder that contains scorecard_pull.py AND the
+# API_Documentation/ subfolder.  Leave as None when running as a normal script.
+JUPYTER_BASE_DIR = None   # e.g. r"C:\Users\you\college_scorecard_historical_data_pull"
+
 
 def _parse_iso(s):
     """Parse an isoformat datetime string (Python 3.6-compatible)."""
@@ -69,7 +74,10 @@ try:
     SCRIPT_DIR  = Path(__file__).parent.resolve()
     _SCRIPT_FILE = Path(__file__).resolve()
 except NameError:
-    SCRIPT_DIR  = Path.cwd()
+    if JUPYTER_BASE_DIR is not None:
+        SCRIPT_DIR = Path(JUPYTER_BASE_DIR).resolve()
+    else:
+        SCRIPT_DIR = Path.cwd()
     _SCRIPT_FILE = SCRIPT_DIR / "scorecard_pull.py"
 
 OUTPUT_DIR  = SCRIPT_DIR / "output"
@@ -77,6 +85,16 @@ TEMP_DIR    = SCRIPT_DIR / "temp"
 CHECKPOINT  = SCRIPT_DIR / "checkpoint.json"
 DATA_DICT   = SCRIPT_DIR / "API_Documentation" / "CollegeScorecardDataDictionary.csv"
 LOG_FILE    = SCRIPT_DIR / "scorecard_pull.log"
+
+# Early sanity check — catches wrong cwd when code is pasted into Jupyter.
+if not DATA_DICT.exists():
+    print(
+        "WARNING: API_Documentation/ not found under:\n"
+        "  {}\n"
+        "If you pasted this code into a Jupyter cell, set JUPYTER_BASE_DIR at\n"
+        "the top of the cell to the folder containing scorecard_pull.py, e.g.:\n"
+        '  JUPYTER_BASE_DIR = r"C:\\Users\\you\\college_scorecard_historical_data_pull"'.format(SCRIPT_DIR)
+    )
 
 # ── CONSTANTS ───────────────────────────────────────────────────────────────
 YEAR_CATS   = {"academics", "admissions", "aid", "completion",
